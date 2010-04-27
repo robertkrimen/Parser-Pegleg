@@ -1,0 +1,93 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+package Pegleg;
+
+use Any::Moose;
+
+has _rule_map => qw/ is ro isa HashRef lazy_build 1 /;
+sub _build__rule_map { {} }
+sub rule { return shift->_rule_map }
+
+sub setup {
+    my $self = shift;
+    while( @_ ) {
+        my $name = shift;
+        my $body = shift;
+        $self->rule->{$name} = $body;
+    }
+}
+
+
+sub debug {
+    warn @_, "\n";
+}
+
+sub parse {
+    my $self = shift;
+    my $input = shift;
+    my $pattern = shift;
+    my $state = shift;
+
+    $state = Pegleg::State->new( position => 0 ) unless $state;
+
+    return if $state->position == length $input;
+
+    debug "input => $input @ ", $state->position, " [", length $input, "]";
+    debug "pattern => $pattern (", ref $pattern, ")";
+
+    if ( ref $pattern eq 'ARRAY' ) {
+        my $input = $input;
+        my $state = $state;
+        my( @result, $result );
+        for my $_ (@$pattern) {
+            return unless ( $result, $input, $state ) = $self->parse( $input, $_, $state );
+            push @result, $result;
+        }
+        return ( \@result, $input, $state );
+    }
+    elsif ( ref $pattern eq '' ) {
+        return $self->parse( $input, $self->rule->{$pattern}, $state );
+    }
+    elsif ( ref $pattern eq 'Regexp' ) {
+        my $slice = substr $input, $state->position;
+        return unless $slice =~ m/$pattern/;
+        my $matched = substr( $slice, $-[0], $+[0]-$-[0] );
+        debug "matched => $matched";
+        $state = Pegleg::State->new( position => $state->position + $+[0] );
+        return ( $matched, $input, $state );
+    }
+
+    die "Err";
+}
+
+package Pegleg::State;
+
+use Any::Moose;
+
+has position => qw/ is ro required 1 /;
+
+package main;
+
+use Test::Most;
+
+plan qw/ no_plan /;
+
+ok( 1 );
+
+sub parser {
+    my $parser = Pegleg->new;
+    $parser->setup( @_ );
+    return $parser;
+}
+
+my $parser = parser
+    literal => qr/^\d*\.\d*|\d+|".*?"/,
+    operator => qr/^\+|\-|\*|\/|\=\=/,
+    operation => [qw/ literal operator expression /],
+    expression => [qw/ operation /],
+;
+
+$parser->parse( '1+2-3', 'expression' );

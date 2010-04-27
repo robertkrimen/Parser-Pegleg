@@ -28,39 +28,75 @@ sub debug {
 sub parse {
     my $self = shift;
     my $input = shift;
-    my $pattern = shift;
+    my $rule = shift;
+
+    my $parse = Pegleg::Parse->new( input => $input );
+    my $state = Pegleg::State->new( position => 0 );
+
+    return $self->_parse( $parse, $state, $rule ); 
+}
+
+sub _parse {
+    my $self = shift;
+    my $parse = shift;
     my $state = shift;
+    my $rule = shift;
 
-    $state = Pegleg::State->new( position => 0 ) unless $state;
+    my $input = $parse->input;
 
-    return if $state->position == length $input;
+    return if $state->position == $parse->length;
 
     debug "input => $input @ ", $state->position, " [", length $input, "]";
-    debug "pattern => $pattern (", ref $pattern, ")";
+    debug "rule => $rule (", ref $rule, ")";
 
-    if ( ref $pattern eq 'ARRAY' ) {
+    if ( ref $rule eq 'ARRAY' ) {
         my $input = $input;
         my $state = $state;
         my( @result, $result );
-        for my $_ (@$pattern) {
-            return unless ( $result, $input, $state ) = $self->parse( $input, $_, $state );
+        for my $_ (@$rule) {
+            return unless ( $result, $state ) = $self->_parse( $parse, $state, $_ );
             push @result, $result;
         }
         return ( \@result, $input, $state );
     }
-    elsif ( ref $pattern eq '' ) {
-        return $self->parse( $input, $self->rule->{$pattern}, $state );
+    elsif ( ref $rule eq '' ) {
+        return $self->_parse( $parse, $state, $self->rule->{$rule} );
     }
-    elsif ( ref $pattern eq 'Regexp' ) {
-        my $slice = substr $input, $state->position;
-        return unless $slice =~ m/$pattern/;
+    elsif ( ref $rule eq 'Regexp' ) {
+        my $slice = $parse->input( $state->position );
+        return unless $slice =~ m/$rule/;
         my $matched = substr( $slice, $-[0], $+[0]-$-[0] );
         debug "matched => $matched";
         $state = Pegleg::State->new( position => $state->position + $+[0] );
-        return ( $matched, $input, $state );
+        return ( $matched, $state );
     }
 
     die "Err";
+}
+
+package Pegleg::Rule;
+
+use Any::Moose;
+
+package Pegleg::Parse;
+
+use Any::Moose;
+
+has length => qw/ is ro isa Int lazy_build 1 /;
+sub _build_length { length shift->_input }
+
+has _input => qw/ is rw isa Str required 1 init_arg input /;
+has _input_cache => qw/ is ro isa HashRef lazy_build 1 /;
+sub _build__input_cache { {} }
+
+sub input {
+    my $self = shift;
+    return $self->_input unless @_;
+    my $position = shift;
+    return $self->_input_cache->{$position} ||= do {
+        my $input = $self->_input;
+        substr $input, $position;
+    };
 }
 
 package Pegleg::State;

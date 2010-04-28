@@ -42,30 +42,27 @@ sub _parse {
     my $state = shift;
     my $rule = shift;
 
-    my $input = $parse->input;
-
     return if $state->position == $parse->length;
 
-    debug "input => $input @ ", $state->position, " [", length $input, "]";
-    debug "rule => $rule (", ref $rule, ")";
+    debug "input => ", $parse->input, " @ ", $state->position, " [", $parse->length, "]";
+    debug "rule => $rule"; # (", ref $rule, ")";
 
     if ( ref $rule eq 'ARRAY' ) {
-        my $input = $input;
         my $state = $state;
         my( @result, $result );
         for my $_ (@$rule) {
             return unless ( $result, $state ) = $self->_parse( $parse, $state, $_ );
             push @result, $result;
         }
-        return ( \@result, $input, $state );
+        return ( \@result, $state );
     }
     elsif ( ref $rule eq '' ) {
         return $self->_parse( $parse, $state, $self->rule->{$rule} );
     }
     elsif ( ref $rule eq 'Regexp' ) {
-        my $slice = $parse->input( $state->position );
-        return unless $slice =~ m/$rule/;
-        my $matched = substr( $slice, $-[0], $+[0]-$-[0] );
+        my $input = $parse->input( $state->position );
+        return unless $input =~ m/$rule/;
+        my $matched = substr( $input, $-[0], $+[0]-$-[0] );
         debug "matched => $matched";
         $state = Pegleg::State->new( position => $state->position + $+[0] );
         return ( $matched, $state );

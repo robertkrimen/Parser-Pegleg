@@ -3,13 +3,42 @@
 use strict;
 use warnings;
 
+our $DEBUG = sub {
+    warn @_, "\n";
+};
+
 package Pegleg;
 
 use Any::Moose;
+use Carp;
 
 has _rule_map => qw/ is ro isa HashRef lazy_build 1 /;
 sub _build__rule_map { {} }
-sub rule { return shift->_rule_map }
+sub rule {
+    my $self = shift;
+    return $self->_rule_map unless @_;
+    my $name = shift;
+    return unless defined( my $rule = $self->_rule_map->{$name} );
+
+    return $rule if blessed $rule && $rule->can( 'parse' );
+
+    my $type = ref $rule;
+
+    if ( $type eq 'ARRAY' ) {
+        $rule = Pegleg::Rule::Sequence->new( sequence => $rule );
+    }
+    elsif ( $type eq '' ) {
+        return $self->rule( $rule ); # TODO Could loop... forever...
+    }
+    elsif ( $type eq 'Regexp' ) {
+        $rule = Pegleg::Rule::Regexp->new( regexp => $rule );
+    }
+    else {
+        croak "Invalid rule type ($type)";
+    }
+
+    return $self->_rule_map->{$name} = $rule;
+}
 
 sub setup {
     my $self = shift;
@@ -30,54 +59,71 @@ sub parse {
     my $input = shift;
     my $rule = shift;
 
-    my $parse = Pegleg::Parse->new( input => $input );
+    my $parse = Pegleg::Parse->new( input => $input, parser => $self );
     my $state = Pegleg::State->new( position => 0 );
 
-    return $self->_parse( $parse, $state, $rule ); 
+    return $parse->parse( $state, $rule ); 
 }
 
-sub _parse {
+package Pegleg::Role::Rule;
+
+use Any::Moose '::Role';
+
+requires 'parse';
+
+package Pegleg::Rule::Sequence;
+
+use Any::Moose;
+
+with qw/ Pegleg::Role::Rule /;
+
+has sequence => qw/ is ro required 1 isa ArrayRef /;
+
+sub parse {
     my $self = shift;
     my $parse = shift;
     my $state = shift;
-    my $rule = shift;
 
-    return if $state->position == $parse->length;
+    my $sequence = $self->sequence;;
 
-    debug "input => ", $parse->input, " @ ", $state->position, " [", $parse->length, "]";
-    debug "rule => $rule"; # (", ref $rule, ")";
-
-    if ( ref $rule eq 'ARRAY' ) {
-        my $state = $state;
-        my( @result, $result );
-        for my $_ (@$rule) {
-            return unless ( $result, $state ) = $self->_parse( $parse, $state, $_ );
-            push @result, $result;
-        }
-        return ( \@result, $state );
+    my( @result, $result );
+    for my $rule (@$sequence) {
+        return unless ( $result, $state ) = $parse->parse( $state, $rule );
+        push @result, $result;
     }
-    elsif ( ref $rule eq '' ) {
-        return $self->_parse( $parse, $state, $self->rule->{$rule} );
-    }
-    elsif ( ref $rule eq 'Regexp' ) {
-        my $input = $parse->input( $state->position );
-        return unless $input =~ m/$rule/;
-        my $matched = substr( $input, $-[0], $+[0]-$-[0] );
-        debug "matched => $matched";
-        $state = Pegleg::State->new( position => $state->position + $+[0] );
-        return ( $matched, $state );
-    }
-
-    die "Err";
+    return ( \@result, $state );
 }
 
-package Pegleg::Rule;
+package Pegleg::Rule::Regexp;
 
 use Any::Moose;
+
+with qw/ Pegleg::Role::Rule /;
+
+has regexp => qw/ is ro required 1 isa Regexp /;;
+
+sub parse {
+    my $self = shift;
+    my $parse = shift;
+    my $state = shift;
+
+    my $regexp = $self->regexp;
+    my $input = $parse->input( $state->position );
+    return unless $input =~ m/$regexp/;
+    my $matched = substr( $input, $-[0], $+[0]-$-[0] );
+    $state = Pegleg::State->new( position => $state->position + $+[0] );
+
+    $DEBUG->( 'matched => ', $matched );
+
+    return ( $matched, $state );
+}
 
 package Pegleg::Parse;
 
 use Any::Moose;
+use Carp;
+
+has parser => qw/ is ro required 1 isa Pegleg /;
 
 has length => qw/ is ro isa Int lazy_build 1 /;
 sub _build_length { length shift->_input }
@@ -96,6 +142,32 @@ sub input {
     };
 }
 
+sub rule {
+    my $self = shift;
+    my $rule = shift;
+
+    return $self->parser->rule( $rule ) or croak "Invalid rule ($rule)";
+}
+
+sub parse {
+    my $self = shift;
+    my $state = shift;
+    my $rule = shift;
+
+    $DEBUG->( "input => ", $self->input, " @ ", $state->position, " [", $self->length, "]" ); 
+    $DEBUG->( "rule => $rule" ); # (", ref $rule, ")" );
+
+    return if $state->position == $self->length;
+
+    $rule = $self->rule( $rule );
+
+    return $rule->parse( $self, $state );
+
+#    debug "input => ", $parse->input, " @ ", $state->position, " [", $parse->length, "]";
+#    debug "rule => $rule"; # (", ref $rule, ")";
+
+}
+
 package Pegleg::State;
 
 use Any::Moose;
@@ -110,6 +182,8 @@ plan qw/ no_plan /;
 
 ok( 1 );
 
+use JSON;
+
 sub parser {
     my $parser = Pegleg->new;
     $parser->setup( @_ );
@@ -123,4 +197,6 @@ my $parser = parser
     expression => [qw/ operation /],
 ;
 
-$parser->parse( '1+2-3', 'expression' );
+my @result = $parser->parse( '1+2-3', 'expression' );
+
+print JSON->new->encode( \@result );
